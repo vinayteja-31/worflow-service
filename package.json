@@ -1,0 +1,26 @@
+{
+  "name": "deploy-workflow-service",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Standalone deploy orchestration: Docker build/push, IAM, container mgmt (same contract as support-service-api-mgmt workflow API)",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "run:build-push": "node scripts/run-build-push.mjs",
+    "run:container-update": "node scripts/run-container-update.mjs",
+    "build:action": "ncc build action-src/main.js -o dist --source-map --license licenses.txt && echo '{\"type\":\"commonjs\"}' > dist/package.json"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@actions/core": "^1.10.1",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.0"
+  },
+  "devDependencies": {
+    "@vercel/ncc": "^0.38.1"
+  }
+}

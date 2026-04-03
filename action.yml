@@ -1,0 +1,76 @@
+name: 'Container Deploy via Gateway'
+description: 'Deploy a container image through the deployment gateway API (IAM login, container update, rollout polling)'
+branding:
+  icon: 'upload-cloud'
+  color: 'blue'
+
+inputs:
+  gateway-url:
+    description: 'Base URL of the deployment gateway (e.g. https://support-service-api-mgmt.dev.tower.cloud)'
+    required: true
+  org-id:
+    description: 'Organization ID for IAM and container management'
+    required: true
+  iam-username:
+    description: 'IAM username for authentication'
+    required: true
+  iam-password:
+    description: 'IAM password for authentication'
+    required: true
+  service-name:
+    description: 'Target service name in container management'
+    required: true
+  container-name:
+    description: 'Target container name (must already exist)'
+    required: true
+  image:
+    description: 'Full image URI to deploy (e.g. ghcr.io/org/repo:sha256)'
+    required: true
+  environment:
+    description: 'Deployment environment label'
+    required: false
+    default: 'dev'
+  registry-mode:
+    description: 'Registry profile: auto, tower-managed, external-private, external-public'
+    required: false
+    default: 'auto'
+  registry-host:
+    description: 'Registry host (e.g. ghcr.io, docker.io). Used with auto and external-private profiles.'
+    required: false
+    default: ''
+  tower-registry-name:
+    description: 'Tower registry short name (e.g. test2). Used with tower profile.'
+    required: false
+    default: ''
+  registry-username:
+    description: 'Registry username for private or tower registries'
+    required: false
+    default: ''
+  registry-password:
+    description: 'Registry password for private or tower registries'
+    required: false
+    default: ''
+  rollout-timeout-seconds:
+    description: 'Max seconds to wait for rollout to reach terminal state'
+    required: false
+    default: '600'
+  poll-interval-seconds:
+    description: 'Seconds between deployment status poll requests'
+    required: false
+    default: '5'
+  request-id:
+    description: 'Custom request ID for tracing. Defaults to ci-run-{run_id}-{run_attempt}.'
+    required: false
+    default: ''
+
+outputs:
+  deployment-id:
+    description: 'The deployment ID returned by the gateway'
+  status:
+    description: 'Terminal deployment status (succeeded or failed)'
+  image:
+    description: 'The image URI that was deployed'
+
+runs:
+  using: 'node20'
+  main: 'dist/index.js'

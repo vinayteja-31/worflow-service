@@ -1,0 +1,5 @@
+node_modules/
+.env
+*.log
+requirement_inputs.js
+.last-build-image.json
