@@ -27807,13 +27807,32 @@ async function run() {
     core.info(`Container '${containerName}' found`);
 
     // Step 3: Update container image via API gateway
-    const containerSpec = { imageTag: image };
+    // Parse image into registry (host) + imageTag (path:tag) — backend requires split fields.
+    // e.g. "ghcr.io/vinayteja-31/sample-workflow:abc123" → registry="ghcr.io", imageTag="vinayteja-31/sample-workflow:abc123"
+    const firstSlash = image.indexOf("/");
+    if (firstSlash < 0) {
+      throw new Error(`Invalid image format: expected registry/repo:tag, got '${image}'`);
+    }
+    const registry = image.slice(0, firstSlash);
+    let imageTag = image.slice(firstSlash + 1);
+    if (!imageTag.includes(":") && !imageTag.includes("@")) {
+      imageTag = `${imageTag}:latest`;
+    }
+
+    // Determine registry type
+    let registryType = "public";
+    if (registryUsername && registryPassword) {
+      registryType = registry.includes("tower.cloud") ? "tower" : "private";
+    }
+
+    const containerSpec = { registryType, registry, imageTag };
 
     // Add registry credentials if provided (for private/tower registries)
     if (registryUsername && registryPassword) {
       containerSpec.registryCredentials = {
         username: registryUsername,
         password: registryPassword,
+        label: `wf-${containerName.replace(/[^a-zA-Z0-9-]/g, "-")}`.slice(0, 50),
       };
     }
 
