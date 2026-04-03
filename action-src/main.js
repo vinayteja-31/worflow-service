@@ -45,8 +45,38 @@ async function run() {
     core.info(`Container '${containerName}' found`);
 
     // Step 3: Update container image via API gateway
-    // Same format as the Go deployment action: just imageTag with full image URL.
-    const containerSpec = { imageTag: image };
+    // Parse full image URL into registry (host) + imageTag (path:tag)
+    // e.g. "test2.hyd.cr.tower.cloud/my-org/my-app:sha" → registry="test2.hyd.cr.tower.cloud", imageTag="my-org/my-app:sha"
+    const firstSlash = image.indexOf("/");
+    if (firstSlash < 0) {
+      throw new Error(`Invalid image format: expected registry/repo:tag, got '${image}'`);
+    }
+    const registry = image.slice(0, firstSlash);
+    let imageTag = image.slice(firstSlash + 1);
+    if (!imageTag.includes(":") && !imageTag.includes("@")) {
+      imageTag = `${imageTag}:latest`;
+    }
+
+    // Determine registry type
+    let registryType = "public";
+    if (registry.includes("tower.cloud")) {
+      registryType = "tower";
+    } else if (registryUsername && registryPassword) {
+      registryType = "private";
+    }
+
+    const containerSpec = { registryType, registry, imageTag };
+
+    // Add registry credentials for tower/private registries
+    if ((registryType === "tower" || registryType === "private") && registryUsername && registryPassword) {
+      containerSpec.registryCredentials = {
+        username: registryUsername,
+        password: registryPassword,
+        label: `wf-${containerName.replace(/[^a-zA-Z0-9-]/g, "-")}`.slice(0, 50),
+      };
+    }
+
+    core.info(`Registry: ${registry}, ImageTag: ${imageTag}, Type: ${registryType}`);
 
     const updateResult = await updateContainer(towerApiURL, containerName, token, orgId, containerSpec);
 
