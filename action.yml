@@ -1,5 +1,5 @@
 name: 'Tower Cloud Container Deploy (Node.js)'
-description: 'Deploy a container image to Tower Cloud — IAM login, preflight check, container update, rollout polling via API gateway'
+description: 'Deploy a container image to Tower Cloud — IAM login, preflight check, container update via API gateway'
 branding:
   icon: 'upload-cloud'
   color: 'blue'
@@ -22,7 +22,7 @@ inputs:
     description: 'Name of the existing container instance to update'
     required: true
   image:
-    description: 'Full image URI to deploy (e.g. ghcr.io/org/repo:sha or registry.tower.cloud/repo/app:tag)'
+    description: 'Full image URI to deploy (e.g. registry.tower.cloud/repo/app:tag)'
     required: true
   registry-username:
     description: 'Registry username (for private/tower registries)'
@@ -32,20 +32,14 @@ inputs:
     description: 'Registry password (for private/tower registries)'
     required: false
     default: ''
-  rollout-timeout-seconds:
-    description: 'Max seconds to wait for rollout to reach terminal state'
-    required: false
-    default: '600'
-  poll-interval-seconds:
-    description: 'Seconds between status poll requests'
-    required: false
-    default: '5'
 
 outputs:
   status:
-    description: 'Terminal container state (running, ready, healthy, succeeded)'
+    description: 'Deployment status (accepted)'
   image:
     description: 'The image URI that was deployed'
+  task-id:
+    description: 'Deployment task ID returned by Tower Cloud'
 
 runs:
   using: 'node20'

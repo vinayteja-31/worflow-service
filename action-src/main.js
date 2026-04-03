@@ -1,7 +1,7 @@
 "use strict";
 
 const core = require("@actions/core");
-const { iamLogin, getContainer, updateContainer, waitForRollout } = require("./deploy-client");
+const { iamLogin, getContainer, updateContainer } = require("./deploy-client");
 
 async function run() {
   try {
@@ -14,8 +14,6 @@ async function run() {
     const image = core.getInput("image", { required: true });
     const registryUsername = core.getInput("registry-username");
     const registryPassword = core.getInput("registry-password");
-    const rolloutTimeoutSec = parseInt(core.getInput("rollout-timeout-seconds"), 10) || 600;
-    const pollIntervalSec = parseInt(core.getInput("poll-interval-seconds"), 10) || 5;
 
     // Mask secrets
     core.setSecret(towerPassword);
@@ -50,23 +48,18 @@ async function run() {
     // Same format as the Go deployment action: just imageTag with full image URL.
     const containerSpec = { imageTag: image };
 
-    await updateContainer(towerApiURL, containerName, token, orgId, containerSpec);
+    const updateResult = await updateContainer(towerApiURL, containerName, token, orgId, containerSpec);
 
-    // Step 4: Poll rollout status
-    const finalState = await waitForRollout(
-      towerApiURL,
-      containerName,
-      token,
-      orgId,
-      rolloutTimeoutSec * 1000,
-      pollIntervalSec * 1000
-    );
+    // Extract taskId if returned (same as Go deployment action)
+    const taskId = updateResult.data?.data?.taskId || updateResult.data?.taskId || "";
 
     // Set outputs
-    core.setOutput("status", finalState);
+    core.setOutput("status", "accepted");
     core.setOutput("image", image);
+    if (taskId) core.setOutput("task-id", taskId);
 
-    core.info(`Deployment successful! Container '${containerName}' is ${finalState}`);
+    core.info(`Container update accepted${taskId ? ` (taskId: ${taskId})` : ""}`);
+    core.info(`Image: ${image}`);
   } catch (err) {
     core.setFailed(err.message);
   }
