@@ -20,12 +20,10 @@ import { resolveTowerRegistryHost } from "./config/resolveRegistryHost.js";
 import { pickBuildAndPushBody, pickContainerUpdateBody } from "./http/pickBodies.js";
 
 const PORT = Number(process.env.PORT || 3000);
-const IAM_SERVICE_URL = process.env.IAM_SERVICE_URL || "";
-const SERVICE_CONTAINER_MGMT_URL = process.env.SERVICE_CONTAINER_MGMT_URL || "";
+const TOWER_API_URL = process.env.TOWER_API_URL || "";
 
 const manager = new DeploymentManager({
-  iamBaseURL: IAM_SERVICE_URL,
-  containerMgmtBaseURL: SERVICE_CONTAINER_MGMT_URL,
+  towerApiURL: TOWER_API_URL,
 });
 
 const app = express();
@@ -153,6 +151,5 @@ app.use((_req, res) => {
 
 app.listen(PORT, () => {
   console.log(`deploy-workflow-service listening on :${PORT}`);
-  if (!IAM_SERVICE_URL) console.warn("WARN: IAM_SERVICE_URL is not set");
-  if (!SERVICE_CONTAINER_MGMT_URL) console.warn("WARN: SERVICE_CONTAINER_MGMT_URL is not set");
+  if (!TOWER_API_URL) console.warn("WARN: TOWER_API_URL is not set");
 });

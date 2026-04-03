@@ -2,20 +2,24 @@
 
 const core = require("@actions/core");
 
+const DEFAULT_POLL_MS = 5000;
+
 /**
- * POST /api/deployments/execute — start a deployment.
- * @param {string} gatewayUrl
- * @param {object} body — ExecuteDeploymentRequest
- * @returns {Promise<{ deploymentId: string, status: string, image: string }>}
+ * POST /public?action=login — IAM authentication via API gateway.
+ * @param {string} towerApiURL
+ * @param {string} username
+ * @param {string} password
+ * @param {string} orgId
+ * @returns {Promise<string>} access token
  */
-async function execute(gatewayUrl, body) {
-  const url = `${gatewayUrl.replace(/\/+$/, "")}/api/deployments/execute`;
-  core.info(`POST ${url}`);
+async function iamLogin(towerApiURL, username, password, orgId) {
+  const url = `${towerApiURL.replace(/\/+$/, "")}/public?action=login`;
+  core.info("Authenticating with Tower Cloud...");
 
   const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ username, password, organizationId: orgId }),
   });
 
   const text = await res.text();
@@ -23,65 +27,126 @@ async function execute(gatewayUrl, body) {
   try {
     data = JSON.parse(text);
   } catch {
-    throw new Error(`Gateway returned non-JSON (HTTP ${res.status}): ${text.slice(0, 500)}`);
+    throw new Error(`IAM returned non-JSON (HTTP ${res.status}): ${text.slice(0, 500)}`);
   }
 
-  if (res.status !== 200 && res.status !== 202) {
-    throw new Error(
-      `Gateway returned HTTP ${res.status}: ${data.message || data.error || text.slice(0, 500)}`
-    );
+  if (res.status >= 400) {
+    throw new Error(`IAM login failed (HTTP ${res.status}): ${data.message || text.slice(0, 500)}`);
   }
 
-  if (!data.success) {
-    throw new Error(`Gateway returned success=false: ${data.message || JSON.stringify(data)}`);
+  // Extract token from various response shapes
+  const token =
+    data.access_token || data.accessToken || data.token ||
+    data.data?.access_token || data.data?.accessToken || data.data?.token ||
+    data.result?.access_token || data.result?.accessToken || data.result?.token;
+
+  if (!token) {
+    throw new Error("Missing access token in IAM response");
   }
 
-  const deploymentId = data.data?.deploymentId;
-  if (!deploymentId) {
-    throw new Error("Missing data.deploymentId in gateway response");
-  }
-
-  return {
-    deploymentId,
-    status: data.data.status || "pending",
-    image: data.data.image || body.image || "",
-  };
+  core.info("Successfully authenticated");
+  return token;
 }
 
 /**
- * Poll GET /api/deployments/:id until terminal state.
- * @param {string} gatewayUrl
- * @param {string} deploymentId
+ * GET /service/container-instance/:name — check container exists via API gateway.
+ * @param {string} towerApiURL
+ * @param {string} containerName
+ * @param {string} token
+ * @param {string} orgId
+ */
+async function getContainer(towerApiURL, containerName, token, orgId) {
+  const url = `${towerApiURL.replace(/\/+$/, "")}/service/container-instance/${encodeURIComponent(containerName)}`;
+  core.info(`Checking container instance '${containerName}'...`);
+
+  const res = await fetch(url, {
+    method: "GET",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+      "x-organization-id": orgId,
+    },
+  });
+
+  const text = await res.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    data = { _raw: text };
+  }
+
+  return { status: res.status, data, text };
+}
+
+/**
+ * PUT /service/container-instance/:name — update container image via API gateway.
+ * @param {string} towerApiURL
+ * @param {string} containerName
+ * @param {string} token
+ * @param {string} orgId
+ * @param {object} containerSpec
+ */
+async function updateContainer(towerApiURL, containerName, token, orgId, containerSpec) {
+  const url = `${towerApiURL.replace(/\/+$/, "")}/service/container-instance/${encodeURIComponent(containerName)}`;
+  core.info(`Updating container '${containerName}' with new image...`);
+
+  const res = await fetch(url, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+      "x-organization-id": orgId,
+    },
+    body: JSON.stringify({ containerSpec }),
+  });
+
+  const text = await res.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    data = { _raw: text };
+  }
+
+  if (res.status >= 400) {
+    throw new Error(`Container update failed (HTTP ${res.status}): ${text.slice(0, 500)}`);
+  }
+
+  core.info("Container update accepted");
+  return { status: res.status, data };
+}
+
+/**
+ * Poll container state until healthy or timeout.
+ * @param {string} towerApiURL
+ * @param {string} containerName
+ * @param {string} token
+ * @param {string} orgId
  * @param {number} timeoutMs
  * @param {number} intervalMs
- * @returns {Promise<{ status: string, message: string, image: string }>}
  */
-async function poll(gatewayUrl, deploymentId, timeoutMs, intervalMs) {
-  const url = `${gatewayUrl.replace(/\/+$/, "")}/api/deployments/${deploymentId}`;
+async function waitForRollout(towerApiURL, containerName, token, orgId, timeoutMs, intervalMs) {
   const deadline = Date.now() + timeoutMs;
+  core.info(`Polling rollout status (timeout: ${Math.round(timeoutMs / 1000)}s)...`);
 
   while (Date.now() < deadline) {
     try {
-      const res = await fetch(url);
-      if (res.status === 200) {
-        const json = await res.json();
-        const status = json.data?.status;
-        const message = json.data?.message || "";
-        const image = json.data?.image || "";
-        core.info(`Deployment ${deploymentId}: ${status} — ${message}`);
+      const { status, data } = await getContainer(towerApiURL, containerName, token, orgId);
+      if (status === 200) {
+        const state = extractState(data);
+        core.info(`Container '${containerName}': ${state}`);
 
-        if (status === "succeeded") {
-          return { status, message, image };
+        if (["running", "ready", "healthy", "succeeded"].includes(state)) {
+          return state;
         }
-        if (status === "failed") {
-          throw new Error(`Deployment failed: ${message}`);
+        if (["failed", "error", "crashloopbackoff"].includes(state)) {
+          throw new Error(`Container entered '${state}' state`);
         }
-      } else {
-        core.warning(`Status poll returned HTTP ${res.status}`);
       }
     } catch (err) {
-      if (err.message.startsWith("Deployment failed:")) throw err;
-      core.warning(`Poll error: ${err.message}`);
+      if (err.message.startsWith("Container entered")) throw err;
+      // transient error, keep polling
     }
 
     await new Promise((r) => setTimeout(r, intervalMs));
@@ -91,29 +156,37 @@ async function poll(gatewayUrl, deploymentId, timeoutMs, intervalMs) {
 }
 
 /**
- * Execute deployment and poll until done.
- * @param {string} gatewayUrl
- * @param {object} body
- * @param {number} pollIntervalSec
- * @param {number} timeoutSec
- * @returns {Promise<{ deploymentId: string, status: string, image: string }>}
+ * Extract container state from API response.
  */
-async function executeAndPoll(gatewayUrl, body, pollIntervalSec, timeoutSec) {
-  const result = await execute(gatewayUrl, body);
-  core.info(`Deployment started: ${result.deploymentId}`);
+function extractState(data) {
+  const d = data?.data || data;
+  const container = d?.container || d;
 
-  const final = await poll(
-    gatewayUrl,
-    result.deploymentId,
-    timeoutSec * 1000,
-    pollIntervalSec * 1000
-  );
+  // Try direct state/status fields
+  for (const key of ["state", "status"]) {
+    const v = container?.[key];
+    if (v && typeof v === "string") return v.toLowerCase();
+  }
 
-  return {
-    deploymentId: result.deploymentId,
-    status: final.status,
-    image: final.image || result.image,
-  };
+  // Try kubernetesStatus
+  const k8s = d?.kubernetesStatus;
+  if (k8s) {
+    for (const key of ["phase", "state", "status"]) {
+      const v = k8s[key];
+      if (v && typeof v === "string") return v.toLowerCase();
+    }
+  }
+
+  // Try rollout
+  const rollout = container?.rollout;
+  if (rollout) {
+    for (const key of ["status", "state"]) {
+      const v = rollout[key];
+      if (v && typeof v === "string") return v.toLowerCase();
+    }
+  }
+
+  return "unknown";
 }
 
-module.exports = { execute, poll, executeAndPoll };
+module.exports = { iamLogin, getContainer, updateContainer, waitForRollout };

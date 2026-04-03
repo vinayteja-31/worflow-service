@@ -1,51 +1,79 @@
 "use strict";
 
 const core = require("@actions/core");
-const { buildRequestBody } = require("./input-mapper");
-const { executeAndPoll } = require("./deploy-client");
+const { iamLogin, getContainer, updateContainer, waitForRollout } = require("./deploy-client");
 
 async function run() {
   try {
-    // Mask secrets so they don't appear in logs
-    const iamPassword = core.getInput("iam-password", { required: true });
+    // Read inputs
+    const towerApiURL = core.getInput("tower-api-url", { required: true }) || process.env.TOWER_API_URL;
+    const towerUser = core.getInput("tower-user", { required: true });
+    const towerPassword = core.getInput("tower-password", { required: true });
+    const orgId = core.getInput("organization-id", { required: true });
+    const containerName = core.getInput("container-name", { required: true });
+    const image = core.getInput("image", { required: true });
+    const registryUsername = core.getInput("registry-username");
     const registryPassword = core.getInput("registry-password");
-    core.setSecret(iamPassword);
+    const rolloutTimeoutSec = parseInt(core.getInput("rollout-timeout-seconds"), 10) || 600;
+    const pollIntervalSec = parseInt(core.getInput("poll-interval-seconds"), 10) || 5;
+
+    // Mask secrets
+    core.setSecret(towerPassword);
     if (registryPassword) core.setSecret(registryPassword);
 
-    // Read all inputs
-    const inputs = {
-      gatewayUrl: core.getInput("gateway-url", { required: true }),
-      orgId: core.getInput("org-id", { required: true }),
-      iamUsername: core.getInput("iam-username", { required: true }),
-      iamPassword,
-      serviceName: core.getInput("service-name", { required: true }),
-      containerName: core.getInput("container-name", { required: true }),
-      image: core.getInput("image", { required: true }),
-      environment: core.getInput("environment"),
-      registryMode: core.getInput("registry-mode"),
-      registryHost: core.getInput("registry-host"),
-      towerRegistryName: core.getInput("tower-registry-name"),
-      registryUsername: core.getInput("registry-username"),
-      registryPassword,
-      rolloutTimeoutSeconds: core.getInput("rollout-timeout-seconds"),
-      pollIntervalSeconds: core.getInput("poll-interval-seconds"),
-      requestId: core.getInput("request-id"),
-    };
+    if (!towerApiURL) {
+      throw new Error("tower-api-url is required (or set TOWER_API_URL variable)");
+    }
 
-    const body = buildRequestBody(inputs);
-    core.info(`Deploying ${inputs.containerName} with image ${inputs.image}`);
+    core.info(`Deploying container '${containerName}' with image: ${image}`);
 
-    const pollInterval = parseInt(inputs.pollIntervalSeconds, 10) || 5;
-    const timeout = parseInt(inputs.rolloutTimeoutSeconds, 10) || 600;
+    // Step 1: IAM login via API gateway
+    const token = await iamLogin(towerApiURL, towerUser, towerPassword, orgId);
+    core.setSecret(token);
 
-    const result = await executeAndPoll(inputs.gatewayUrl, body, pollInterval, timeout);
+    // Step 2: Preflight — verify container exists
+    const lookup = await getContainer(towerApiURL, containerName, token, orgId);
+    if (lookup.status === 404) {
+      throw new Error(
+        `Container '${containerName}' not found. Container must already exist.`
+      );
+    }
+    if (lookup.status === 401 || lookup.status === 403) {
+      throw new Error(`Container lookup failed (HTTP ${lookup.status}): check credentials`);
+    }
+    if (lookup.status !== 200) {
+      throw new Error(`Container lookup failed (HTTP ${lookup.status}): ${(lookup.text || "").slice(0, 500)}`);
+    }
+    core.info(`Container '${containerName}' found`);
+
+    // Step 3: Update container image via API gateway
+    const containerSpec = { imageTag: image };
+
+    // Add registry credentials if provided (for private/tower registries)
+    if (registryUsername && registryPassword) {
+      containerSpec.registryCredentials = {
+        username: registryUsername,
+        password: registryPassword,
+      };
+    }
+
+    await updateContainer(towerApiURL, containerName, token, orgId, containerSpec);
+
+    // Step 4: Poll rollout status
+    const finalState = await waitForRollout(
+      towerApiURL,
+      containerName,
+      token,
+      orgId,
+      rolloutTimeoutSec * 1000,
+      pollIntervalSec * 1000
+    );
 
     // Set outputs
-    core.setOutput("deployment-id", result.deploymentId);
-    core.setOutput("status", result.status);
-    core.setOutput("image", result.image);
+    core.setOutput("status", finalState);
+    core.setOutput("image", image);
 
-    core.info(`Deployment ${result.deploymentId} ${result.status}`);
+    core.info(`Deployment successful! Container '${containerName}' is ${finalState}`);
   } catch (err) {
     core.setFailed(err.message);
   }

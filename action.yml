@@ -1,53 +1,35 @@
-name: 'Container Deploy via Gateway'
-description: 'Deploy a container image through the deployment gateway API (IAM login, container update, rollout polling)'
+name: 'Tower Cloud Container Deploy (Node.js)'
+description: 'Deploy a container image to Tower Cloud — IAM login, preflight check, container update, rollout polling via API gateway'
 branding:
   icon: 'upload-cloud'
   color: 'blue'
 
 inputs:
-  gateway-url:
-    description: 'Base URL of the deployment gateway (e.g. https://support-service-api-mgmt.dev.tower.cloud)'
+  tower-api-url:
+    description: 'Tower Cloud API gateway URL (e.g. https://api.dev.tower.cloud). Falls back to TOWER_API_URL variable.'
+    required: false
+    default: ''
+  tower-user:
+    description: 'Tower Cloud username'
     required: true
-  org-id:
-    description: 'Organization ID for IAM and container management'
+  tower-password:
+    description: 'Tower Cloud password'
     required: true
-  iam-username:
-    description: 'IAM username for authentication'
-    required: true
-  iam-password:
-    description: 'IAM password for authentication'
-    required: true
-  service-name:
-    description: 'Target service name in container management'
+  organization-id:
+    description: 'Tower Cloud organization ID'
     required: true
   container-name:
-    description: 'Target container name (must already exist)'
+    description: 'Name of the existing container instance to update'
     required: true
   image:
-    description: 'Full image URI to deploy (e.g. ghcr.io/org/repo:sha256)'
+    description: 'Full image URI to deploy (e.g. ghcr.io/org/repo:sha or registry.tower.cloud/repo/app:tag)'
     required: true
-  environment:
-    description: 'Deployment environment label'
-    required: false
-    default: 'dev'
-  registry-mode:
-    description: 'Registry profile: auto, tower-managed, external-private, external-public'
-    required: false
-    default: 'auto'
-  registry-host:
-    description: 'Registry host (e.g. ghcr.io, docker.io). Used with auto and external-private profiles.'
-    required: false
-    default: ''
-  tower-registry-name:
-    description: 'Tower registry short name (e.g. test2). Used with tower profile.'
-    required: false
-    default: ''
   registry-username:
-    description: 'Registry username for private or tower registries'
+    description: 'Registry username (for private/tower registries)'
     required: false
     default: ''
   registry-password:
-    description: 'Registry password for private or tower registries'
+    description: 'Registry password (for private/tower registries)'
     required: false
     default: ''
   rollout-timeout-seconds:
@@ -55,19 +37,13 @@ inputs:
     required: false
     default: '600'
   poll-interval-seconds:
-    description: 'Seconds between deployment status poll requests'
+    description: 'Seconds between status poll requests'
     required: false
     default: '5'
-  request-id:
-    description: 'Custom request ID for tracing. Defaults to ci-run-{run_id}-{run_attempt}.'
-    required: false
-    default: ''
 
 outputs:
-  deployment-id:
-    description: 'The deployment ID returned by the gateway'
   status:
-    description: 'Terminal deployment status (succeeded or failed)'
+    description: 'Terminal container state (running, ready, healthy, succeeded)'
   image:
     description: 'The image URI that was deployed'
 

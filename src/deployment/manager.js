@@ -191,8 +191,8 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-async function fetchContainerState(containerMgmtBaseURL, containerName, token, organizationId) {
-  const url = `${containerMgmtBaseURL.replace(/\/+$/, "")}/api/containers/${encodeURIComponent(containerName)}`;
+async function fetchContainerState(towerApiURL, containerName, token, organizationId) {
+  const url = `${towerApiURL.replace(/\/+$/, "")}/service/container-instance/${encodeURIComponent(containerName)}`;
   const { status, data } = await doJSON(url, "GET", token, null, { organizationId });
   if (status >= 400) throw new Error(`status ${status}`);
   const raw = /** @type {Record<string, unknown>} */ (data);
@@ -219,14 +219,14 @@ async function fetchContainerState(containerMgmtBaseURL, containerName, token, o
 }
 
 /**
- * GET /api/containers/:name — direct call to container-mgmt.
- * @param {string} containerMgmtBaseURL
+ * GET /service/container-instance/:name via API gateway.
+ * @param {string} towerApiURL
  * @param {string} containerName
  * @param {string} token
  * @param {string} organizationId
  */
-async function getContainerLookup(containerMgmtBaseURL, containerName, token, organizationId) {
-  const url = `${containerMgmtBaseURL.replace(/\/+$/, "")}/api/containers/${encodeURIComponent(containerName)}`;
+async function getContainerLookup(towerApiURL, containerName, token, organizationId) {
+  const url = `${towerApiURL.replace(/\/+$/, "")}/service/container-instance/${encodeURIComponent(containerName)}`;
   return doJSON(url, "GET", token, null, { organizationId });
 }
 
@@ -236,11 +236,11 @@ function shortHttpDetail(text, max = 1200) {
   return t.length <= max ? t : `${t.slice(0, max)}…`;
 }
 
-async function waitForRollout(containerMgmtBaseURL, containerName, token, timeoutMs, organizationId) {
+async function waitForRollout(towerApiURL, containerName, token, timeoutMs, organizationId) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
-      const state = await fetchContainerState(containerMgmtBaseURL, containerName, token, organizationId);
+      const state = await fetchContainerState(towerApiURL, containerName, token, organizationId);
       if (["running", "ready", "healthy", "succeeded"].includes(state)) return;
       if (["failed", "error", "crashloopbackoff"].includes(state)) {
         throw new Error(`container entered ${state} state`);
@@ -257,11 +257,10 @@ async function waitForRollout(containerMgmtBaseURL, containerName, token, timeou
 
 export class DeploymentManager {
   /**
-   * @param {{ iamBaseURL: string, containerMgmtBaseURL: string }} config
+   * @param {{ towerApiURL: string }} config
    */
   constructor(config) {
-    this.iamBaseURL = config.iamBaseURL?.replace(/\/+$/, "") || "";
-    this.containerMgmtBaseURL = config.containerMgmtBaseURL?.replace(/\/+$/, "") || "";
+    this.towerApiURL = config.towerApiURL?.replace(/\/+$/, "") || "";
     /** @type {Map<string, import('./types.js').DeploymentRecord>} */
     this.deployments = new Map();
   }
@@ -377,24 +376,26 @@ export class DeploymentManager {
         }
       }
 
-      if (!this.iamBaseURL) throw new Error("IAM base URL is not configured");
-      if (!this.containerMgmtBaseURL) throw new Error("container management base URL is not configured");
+      if (!this.towerApiURL) throw new Error("TOWER_API_URL is not configured");
 
-      const loginResp = await iamLogin(this.iamBaseURL, req);
+      const api = this.towerApiURL;
+
+      // Step 1: IAM login via API gateway (same path as deployment action)
+      const loginResp = await iamLogin(api, req);
       if (loginResp.expiresIn > 0 && loginResp.expiresIn < 120) {
         throw new Error("iam access token ttl below threshold");
       }
 
-      const base = this.containerMgmtBaseURL;
       const token = loginResp.accessToken;
       const name = req.containerName;
 
-      const lookup = await getContainerLookup(base, name, token, req.orgId);
+      // Step 2: Container lookup via API gateway
+      const lookup = await getContainerLookup(api, name, token, req.orgId);
       const lookupStatus = lookup.status;
       const lookupErr = shortHttpDetail(lookup.text);
       if (lookupStatus === 401 || lookupStatus === 403) {
         throw new Error(
-          `container lookup failed: ${lookupStatus}${lookupErr ? ` — ${lookupErr}` : " (check token is accepted by container-mgmt)"}`
+          `container lookup failed: ${lookupStatus}${lookupErr ? ` — ${lookupErr}` : " (check token / API gateway)"}`
         );
       }
 
@@ -404,9 +405,10 @@ export class DeploymentManager {
             `Container must already exist. Check containerName, orgId, and that the app exists in this organization.`
         );
       } else if (lookupStatus === 200) {
-        this.update(deploymentId, "in_progress", "updating container image (container-mgmt)", false);
+        // Step 3: Update container image via API gateway
+        this.update(deploymentId, "in_progress", "updating container image via API gateway", false);
         const containerSpec = buildUpdateContainerSpec(req, registryType);
-        const putUrl = `${base}/api/containers/${encodeURIComponent(name)}`;
+        const putUrl = `${api}/service/container-instance/${encodeURIComponent(name)}`;
         const putRes = await doJSON(putUrl, "PUT", token, { containerSpec }, { organizationId: req.orgId });
         if (putRes.status >= 400) {
           throw new Error(`container update failed: ${putRes.status} ${putRes.text}`);
@@ -417,6 +419,7 @@ export class DeploymentManager {
         );
       }
 
+      // Step 4: Poll rollout status via API gateway
       this.update(deploymentId, "in_progress", "container rollout in progress", false);
 
       let timeoutMs = DEFAULT_ROLLOUT_MS;
@@ -424,7 +427,7 @@ export class DeploymentManager {
         timeoutMs = req.rollout.timeoutSeconds * 1000;
       }
       await waitForRollout(
-        this.containerMgmtBaseURL,
+        api,
         req.containerName,
         loginResp.accessToken,
         timeoutMs,

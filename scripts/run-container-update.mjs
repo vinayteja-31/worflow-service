@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Reads `requirement_inputs.js`, calls IAM + container management PUT (roll out image).
- * Loads `workflow-service/.env` so IAM_SERVICE_URL / SERVICE_CONTAINER_MGMT_URL apply.
+ * Loads `workflow-service/.env` so TOWER_API_URL applies.
  * Resolves `image`: `DEPLOY_IMAGE` env, or `@last:digest` / `@last:latest` (from `.last-build-image.json`
  * written by `run:build-push`), or empty + `registry.repository` → `host/repo:latest`.
  * Container must already exist (GET 404 = error).
@@ -19,8 +19,7 @@ import { resolveTowerRegistryHost } from "../src/config/resolveRegistryHost.js";
 import { loadRequirementInputs } from "./load-requirement-inputs.mjs";
 import { resolveContainerUpdateImage } from "./resolveContainerUpdateImage.js";
 
-const IAM_SERVICE_URL = process.env.IAM_SERVICE_URL || "";
-const SERVICE_CONTAINER_MGMT_URL = process.env.SERVICE_CONTAINER_MGMT_URL || "";
+const TOWER_API_URL = process.env.TOWER_API_URL || "";
 
 const mod = await loadRequirementInputs();
 const cu = mod.default?.containerUpdate;
@@ -57,8 +56,7 @@ if (cu.deployMovingTag != null && String(cu.deployMovingTag).trim()) {
 }
 
 const manager = new DeploymentManager({
-  iamBaseURL: IAM_SERVICE_URL,
-  containerMgmtBaseURL: SERVICE_CONTAINER_MGMT_URL,
+  towerApiURL: TOWER_API_URL,
 });
 
 console.log("[container-update] image:", body.image || "(resolve via registry.repository → :latest)");
