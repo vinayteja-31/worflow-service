@@ -5,10 +5,6 @@ branding:
   color: 'blue'
 
 inputs:
-  tower-api-url:
-    description: 'Tower Cloud API gateway URL (e.g. https://api.dev.tower.cloud). Falls back to TOWER_API_URL variable.'
-    required: false
-    default: ''
   tower-user:
     description: 'Tower Cloud username'
     required: true

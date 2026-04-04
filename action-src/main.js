@@ -2,11 +2,12 @@
 
 const core = require("@actions/core");
 const { iamLogin, getContainer, updateContainer } = require("./deploy-client");
+const config = require("./config.json");
 
 async function run() {
   try {
     // Read inputs
-    const towerApiURL = core.getInput("tower-api-url") || process.env.TOWER_API_URL;
+    const towerApiURL = config.gateway.url;
     const towerUser = core.getInput("tower-user", { required: true });
     const towerPassword = core.getInput("tower-password", { required: true });
     const orgId = core.getInput("organization-id", { required: true });
@@ -20,10 +21,6 @@ async function run() {
     // Mask secrets
     core.setSecret(towerPassword);
     if (registryPassword) core.setSecret(registryPassword);
-
-    if (!towerApiURL) {
-      throw new Error("tower-api-url is required (or set TOWER_API_URL variable)");
-    }
 
     // Auto-generate registry repo if not provided: {github_repo_name}/{container_name}
     // Same pattern as the Go deployment action
