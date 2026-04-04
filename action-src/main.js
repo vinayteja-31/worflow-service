@@ -6,14 +6,16 @@ const { iamLogin, getContainer, updateContainer } = require("./deploy-client");
 async function run() {
   try {
     // Read inputs
-    const towerApiURL = core.getInput("tower-api-url", { required: true }) || process.env.TOWER_API_URL;
+    const towerApiURL = core.getInput("tower-api-url") || process.env.TOWER_API_URL;
     const towerUser = core.getInput("tower-user", { required: true });
     const towerPassword = core.getInput("tower-password", { required: true });
     const orgId = core.getInput("organization-id", { required: true });
     const containerName = core.getInput("container-name", { required: true });
-    const image = core.getInput("image", { required: true });
+    const registryUrl = core.getInput("registry-url");
+    const registryRepo = core.getInput("registry-repo");
     const registryUsername = core.getInput("registry-username");
     const registryPassword = core.getInput("registry-password");
+    let image = core.getInput("image");
 
     // Mask secrets
     core.setSecret(towerPassword);
@@ -21,6 +23,31 @@ async function run() {
 
     if (!towerApiURL) {
       throw new Error("tower-api-url is required (or set TOWER_API_URL variable)");
+    }
+
+    // Auto-generate registry repo if not provided: {github_repo_name}/{container_name}
+    // Same pattern as the Go deployment action
+    let resolvedRepo = registryRepo;
+    if (!resolvedRepo) {
+      const githubRepo = process.env.GITHUB_REPOSITORY || "";
+      const repoName = githubRepo.includes("/") ? githubRepo.split("/")[1] : githubRepo;
+      if (repoName) {
+        resolvedRepo = `${repoName}/${containerName}`;
+        core.info(`Auto-generated registry repo: ${resolvedRepo}`);
+      }
+    }
+
+    // Auto-generate image if not provided: {registry_url}/{repo}:{sha}
+    if (!image) {
+      if (!registryUrl) {
+        throw new Error("Either 'image' or 'registry-url' must be provided");
+      }
+      const sha = process.env.GITHUB_SHA || "latest";
+      if (!resolvedRepo) {
+        throw new Error("Cannot auto-generate image: registry-repo not provided and GITHUB_REPOSITORY not available");
+      }
+      image = `${registryUrl}/${resolvedRepo}:${sha}`;
+      core.info(`Auto-generated image: ${image}`);
     }
 
     core.info(`Deploying container '${containerName}' with image: ${image}`);
@@ -46,13 +73,10 @@ async function run() {
 
     // Step 3: Update container image via API gateway
     // Parse full image URL into registry (host) + imageTag (path:tag)
-    // e.g. "test2.hyd.cr.tower.cloud/my-org/my-app:sha" → registry="test2.hyd.cr.tower.cloud", imageTag="my-org/my-app:sha"
-    // Docker Hub short-form: "nginx:latest" → registry="docker.io", imageTag="library/nginx:latest"
     let registry, imageTag;
     const firstSlash = image.indexOf("/");
 
     if (firstSlash < 0 || (!image.slice(0, firstSlash).includes(".") && !image.slice(0, firstSlash).includes(":"))) {
-      // No slash or first segment is not a hostname (e.g. "nginx:latest" or "library/nginx:latest")
       registry = "docker.io";
       imageTag = image.includes("/") ? image : `library/${image}`;
     } else {
@@ -82,7 +106,6 @@ async function run() {
 
     const containerSpec = { registryType, registry, imageTag };
 
-    // Add registry credentials for tower/private registries
     if (hasCreds) {
       containerSpec.registryCredentials = {
         username: registryUsername,
@@ -95,7 +118,6 @@ async function run() {
 
     const updateResult = await updateContainer(towerApiURL, containerName, token, orgId, containerSpec);
 
-    // Extract taskId if returned (same as Go deployment action)
     const taskId = updateResult.data?.data?.taskId || updateResult.data?.taskId || "";
 
     // Set outputs

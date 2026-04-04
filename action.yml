@@ -22,8 +22,17 @@ inputs:
     description: 'Name of the existing container instance to update'
     required: true
   image:
-    description: 'Full image URI to deploy (e.g. registry.tower.cloud/repo/app:tag)'
-    required: true
+    description: 'Full image URI to deploy (e.g. registry.tower.cloud/repo/app:tag). If not provided, auto-generates as {registry-url}/{registry-repo}:{github-sha}.'
+    required: false
+    default: ''
+  registry-url:
+    description: 'Container registry URL (e.g. test2.hyd.cr.tower.cloud). Required if image is not provided.'
+    required: false
+    default: ''
+  registry-repo:
+    description: 'Repository path in registry (e.g. my-org/my-app). Optional — auto-generates as {github-repo-name}/{container-name} if not provided.'
+    required: false
+    default: ''
   registry-username:
     description: 'Registry username (for private/tower registries)'
     required: false
