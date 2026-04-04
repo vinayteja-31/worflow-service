@@ -2,8 +2,6 @@
 
 const core = require("@actions/core");
 
-const DEFAULT_POLL_MS = 5000;
-
 /**
  * POST /public?action=login — IAM authentication via API gateway.
  * @param {string} towerApiURL
@@ -35,10 +33,7 @@ async function iamLogin(towerApiURL, username, password, orgId) {
   }
 
   // Extract token from various response shapes
-  const token =
-    data.access_token || data.accessToken || data.token ||
-    data.data?.access_token || data.data?.accessToken || data.data?.token ||
-    data.result?.access_token || data.result?.accessToken || data.result?.token;
+  const token = data.access_token; 
 
   if (!token) {
     throw new Error("Missing access token in IAM response");
@@ -117,76 +112,4 @@ async function updateContainer(towerApiURL, containerName, token, orgId, contain
   return { status: res.status, data };
 }
 
-/**
- * Poll container state until healthy or timeout.
- * @param {string} towerApiURL
- * @param {string} containerName
- * @param {string} token
- * @param {string} orgId
- * @param {number} timeoutMs
- * @param {number} intervalMs
- */
-async function waitForRollout(towerApiURL, containerName, token, orgId, timeoutMs, intervalMs) {
-  const deadline = Date.now() + timeoutMs;
-  core.info(`Polling rollout status (timeout: ${Math.round(timeoutMs / 1000)}s)...`);
-
-  while (Date.now() < deadline) {
-    try {
-      const { status, data } = await getContainer(towerApiURL, containerName, token, orgId);
-      if (status === 200) {
-        const state = extractState(data);
-        core.info(`Container '${containerName}': ${state}`);
-
-        if (["running", "ready", "healthy", "succeeded"].includes(state)) {
-          return state;
-        }
-        if (["failed", "error", "crashloopbackoff"].includes(state)) {
-          throw new Error(`Container entered '${state}' state`);
-        }
-      }
-    } catch (err) {
-      if (err.message.startsWith("Container entered")) throw err;
-      // transient error, keep polling
-    }
-
-    await new Promise((r) => setTimeout(r, intervalMs));
-  }
-
-  throw new Error(`Rollout timed out after ${Math.round(timeoutMs / 1000)}s`);
-}
-
-/**
- * Extract container state from API response.
- */
-function extractState(data) {
-  const d = data?.data || data;
-  const container = d?.container || d;
-
-  // Try direct state/status fields
-  for (const key of ["state", "status"]) {
-    const v = container?.[key];
-    if (v && typeof v === "string") return v.toLowerCase();
-  }
-
-  // Try kubernetesStatus
-  const k8s = d?.kubernetesStatus;
-  if (k8s) {
-    for (const key of ["phase", "state", "status"]) {
-      const v = k8s[key];
-      if (v && typeof v === "string") return v.toLowerCase();
-    }
-  }
-
-  // Try rollout
-  const rollout = container?.rollout;
-  if (rollout) {
-    for (const key of ["status", "state"]) {
-      const v = rollout[key];
-      if (v && typeof v === "string") return v.toLowerCase();
-    }
-  }
-
-  return "unknown";
-}
-
-module.exports = { iamLogin, getContainer, updateContainer, waitForRollout };
+module.exports = { iamLogin, getContainer, updateContainer };

@@ -47,28 +47,43 @@ async function run() {
     // Step 3: Update container image via API gateway
     // Parse full image URL into registry (host) + imageTag (path:tag)
     // e.g. "test2.hyd.cr.tower.cloud/my-org/my-app:sha" → registry="test2.hyd.cr.tower.cloud", imageTag="my-org/my-app:sha"
+    // Docker Hub short-form: "nginx:latest" → registry="docker.io", imageTag="library/nginx:latest"
+    let registry, imageTag;
     const firstSlash = image.indexOf("/");
-    if (firstSlash < 0) {
-      throw new Error(`Invalid image format: expected registry/repo:tag, got '${image}'`);
+
+    if (firstSlash < 0 || (!image.slice(0, firstSlash).includes(".") && !image.slice(0, firstSlash).includes(":"))) {
+      // No slash or first segment is not a hostname (e.g. "nginx:latest" or "library/nginx:latest")
+      registry = "docker.io";
+      imageTag = image.includes("/") ? image : `library/${image}`;
+    } else {
+      registry = image.slice(0, firstSlash);
+      imageTag = image.slice(firstSlash + 1);
     }
-    const registry = image.slice(0, firstSlash);
-    let imageTag = image.slice(firstSlash + 1);
+
     if (!imageTag.includes(":") && !imageTag.includes("@")) {
       imageTag = `${imageTag}:latest`;
     }
 
     // Determine registry type
-    let registryType = "public";
-    if (registry.includes("tower.cloud")) {
+    let registryType;
+    const isTower = registry.includes("tower.cloud");
+    const hasCreds = !!(registryUsername && registryPassword);
+
+    if (isTower) {
       registryType = "tower";
-    } else if (registryUsername && registryPassword) {
+      if (!hasCreds) {
+        core.warning("Tower registry detected but no registry-username/registry-password provided. Image pull may fail.");
+      }
+    } else if (hasCreds) {
       registryType = "private";
+    } else {
+      registryType = "public";
     }
 
     const containerSpec = { registryType, registry, imageTag };
 
     // Add registry credentials for tower/private registries
-    if ((registryType === "tower" || registryType === "private") && registryUsername && registryPassword) {
+    if (hasCreds) {
       containerSpec.registryCredentials = {
         username: registryUsername,
         password: registryPassword,
