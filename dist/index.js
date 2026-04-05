@@ -27776,15 +27776,21 @@ async function run() {
       imageTag = `${imageTag}:latest`;
     }
 
-    // Determine registry type
+    // Determine registry type and credentials
     let registryType;
     const isTower = registry.includes("tower.cloud");
     const hasCreds = !!(registryUsername && registryPassword);
 
+    // For Tower registry, use IAM credentials if no separate registry creds provided
+    let effectiveRegistryUsername = registryUsername;
+    let effectiveRegistryPassword = registryPassword;
+
     if (isTower) {
       registryType = "tower";
       if (!hasCreds) {
-        core.warning("Tower registry detected but no registry-username/registry-password provided. Image pull may fail.");
+        core.info("Tower registry detected — using IAM credentials for registry authentication.");
+        effectiveRegistryUsername = towerUser;
+        effectiveRegistryPassword = towerPassword;
       }
     } else if (hasCreds) {
       registryType = "private";
@@ -27793,11 +27799,12 @@ async function run() {
     }
 
     const containerSpec = { registryType, registry, imageTag };
+    const hasEffectiveCreds = !!(effectiveRegistryUsername && effectiveRegistryPassword);
 
-    if (hasCreds) {
+    if (hasEffectiveCreds) {
       containerSpec.registryCredentials = {
-        username: registryUsername,
-        password: registryPassword,
+        username: effectiveRegistryUsername,
+        password: effectiveRegistryPassword,
         label: `wf-${containerName.replace(/[^a-zA-Z0-9-]/g, "-")}`.slice(0, 50),
       };
     }
