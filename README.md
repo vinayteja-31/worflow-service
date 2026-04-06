@@ -8,13 +8,23 @@ Before using this action, you need:
 
 - A **Tower Cloud account** with an organization
 - An existing **Container Instance** in Tower Cloud
-- A **Tower Container Registry (TCR)** with a repository and at least one image tag
+- A container image in a **Tower**, **public**, or **private** registry
 
 > **First-time setup:** The container instance must already exist in Tower Cloud before this action can deploy to it. To create one, push your first image to the registry manually (or run the workflow without the deploy step), then create the container instance in the [Tower Cloud portal](https://tower.cloud/) by selecting that repository and tag.
 
+## Supported Registry Types
+
+This action supports three types of container registries:
+
+| | Tower Registry | Public Registry | Private Registry |
+|---|---|---|---|
+| **Example** | `test2.hyd.cr.tower.cloud` | `docker.io` | `ghcr.io`, AWS ECR, Azure ACR |
+| **Authentication** | Uses IAM credentials (no separate registry creds needed) | No credentials needed | Requires `registry-username` and `registry-password` |
+| **Build & push in workflow** | Yes | No (image already exists) | Yes |
+
 ## Arguments
 
-### Required
+### Required (all registry types)
 
 | Argument | Description |
 |----------|-------------|
@@ -25,13 +35,13 @@ Before using this action, you need:
 
 ### Optional
 
-| Argument | Description |
-|----------|-------------|
-| `image` | Full image URI to deploy (e.g. `test2.hyd.cr.tower.cloud/my-org/my-app:abc123`). If not provided, auto-generates as `{registry-url}/{registry-repo}:{github-sha}`. |
-| `registry-url` | Container registry URL (e.g. `test2.hyd.cr.tower.cloud`). Required if `image` is not provided. |
-| `registry-repo` | Repository path in registry (e.g. `my-org/my-app`). Auto-generates as `{github-repo-name}/{container-name}` if not provided. |
-| `registry-username` | Registry username for Tower or private registries |
-| `registry-password` | Registry password for Tower or private registries |
+| Argument | Tower Registry | Public Registry | Private Registry |
+|----------|----------------|-----------------|------------------|
+| `image` | Optional (auto-generates from registry-url + SHA) | Required | Optional (auto-generates from registry-url + SHA) |
+| `registry-url` | Required if `image` not provided | Not needed | Required if `image` not provided |
+| `registry-repo` | Optional (auto-generates as `{repo-name}/{container-name}`) | Not needed | Optional (auto-generates as `{repo-name}/{container-name}`) |
+| `registry-username` | Not needed | Not needed | Required |
+| `registry-password` | Not needed | Not needed | Required |
 
 ### Outputs
 
@@ -41,26 +51,36 @@ Before using this action, you need:
 | `image` | The image URI that was deployed |
 | `task-id` | Deployment task ID returned by Tower Cloud |
 
-## Setting Up Secrets
+## Setting Up Secrets and Variables
 
-In your GitHub repository, go to **Settings > Secrets and variables > Actions > Secrets** and add:
+In your GitHub repository, go to **Settings > Secrets and variables > Actions**.
 
-| Secret Name | Required | Description |
-|-------------|----------|-------------|
-| `DEPLOY_IAM_USERNAME` | Yes | Tower Cloud IAM username |
-| `DEPLOY_IAM_PASSWORD` | Yes | Tower Cloud IAM password |
-| `DEPLOY_ORG_ID` | Yes | Tower Cloud organization ID |
-| `DEPLOY_CONTAINER_NAME` | Yes | Container instance name |
-| `DEPLOY_REGISTRY_URL` | Yes | Tower Container Registry URL (e.g. `test2.hyd.cr.tower.cloud`) |
-| `DEPLOY_REGISTRY_USERNAME` | Yes | Registry username |
-| `DEPLOY_REGISTRY_PASSWORD` | Yes | Registry password |
-| `DEPLOY_REGISTRY_REPO` | Optional | Repository path in registry (e.g. `my-org/my-app`). Auto-generates as `{repo-name}/{container-name}` if not set. |
+### Secrets
 
-> **Note:** No variables need to be configured. The API gateway URL is managed internally by the action.
+| Secret Name | Tower Registry | Public Registry | Private Registry | Description |
+|-------------|:-:|:-:|:-:|-------------|
+| `DEPLOY_IAM_USERNAME` | Required | Required | Required | Tower Cloud IAM username |
+| `DEPLOY_IAM_PASSWORD` | Required | Required | Required | Tower Cloud IAM password |
+| `DEPLOY_REGISTRY_USERNAME` | — | — | Required | Registry username |
+| `DEPLOY_REGISTRY_PASSWORD` | — | — | Required | Registry password |
+
+### Variables
+
+| Variable Name | Tower Registry | Public Registry | Private Registry | Description |
+|---------------|:-:|:-:|:-:|-------------|
+| `DEPLOY_ORG_ID` | Required | Required | Required | Tower Cloud organization ID |
+| `DEPLOY_CONTAINER_NAME` | Required | Required | Required | Container instance name |
+| `DEPLOY_REGISTRY_URL` | Required | — | Required | Registry URL (e.g. `test2.hyd.cr.tower.cloud`, `ghcr.io`) |
+| `DEPLOY_REGISTRY_REPO` | Optional | — | Optional | Repository path (auto-generates as `{repo-name}/{container-name}` if not set) |
+
+> **Note:** The API gateway URL is managed internally by the action — no additional configuration needed.
+> For Tower registry, IAM credentials are automatically used for registry authentication — no separate registry credentials needed.
 
 ## Usage
 
-### Deploy on Every Push to Main
+### Build, Push, and Deploy (Tower / Private Registry)
+
+This single workflow works for both Tower and private registries. For Tower registry, it auto-falls back to IAM credentials. For private registry, set `DEPLOY_REGISTRY_USERNAME` and `DEPLOY_REGISTRY_PASSWORD` in secrets.
 
 ```yml
 name: Deploy to Tower Cloud
@@ -68,6 +88,7 @@ name: Deploy to Tower Cloud
 on:
   push:
     branches: [main]
+  workflow_dispatch:
 
 concurrency:
   group: deploy-${{ github.ref }}
@@ -80,7 +101,7 @@ jobs:
       contents: read
 
     env:
-      IMAGE_TAG: ${{ secrets.DEPLOY_REGISTRY_URL }}/${{ secrets.DEPLOY_REGISTRY_REPO || format('{0}/{1}', github.event.repository.name, secrets.DEPLOY_CONTAINER_NAME) }}:${{ github.sha }}
+      IMAGE_TAG: ${{ vars.DEPLOY_REGISTRY_URL }}/${{ vars.DEPLOY_REGISTRY_REPO || format('{0}/{1}', github.event.repository.name, vars.DEPLOY_CONTAINER_NAME) }}:${{ github.sha }}
 
     steps:
       - uses: actions/checkout@v4
@@ -89,9 +110,9 @@ jobs:
 
       - uses: docker/login-action@v3
         with:
-          registry: ${{ secrets.DEPLOY_REGISTRY_URL }}
-          username: ${{ secrets.DEPLOY_REGISTRY_USERNAME }}
-          password: ${{ secrets.DEPLOY_REGISTRY_PASSWORD }}
+          registry: ${{ vars.DEPLOY_REGISTRY_URL }}
+          username: ${{ secrets.DEPLOY_REGISTRY_USERNAME || secrets.DEPLOY_IAM_USERNAME }}
+          password: ${{ secrets.DEPLOY_REGISTRY_PASSWORD || secrets.DEPLOY_IAM_PASSWORD }}
 
       - uses: docker/build-push-action@v5
         with:
@@ -104,14 +125,16 @@ jobs:
         with:
           tower-user: ${{ secrets.DEPLOY_IAM_USERNAME }}
           tower-password: ${{ secrets.DEPLOY_IAM_PASSWORD }}
-          organization-id: ${{ secrets.DEPLOY_ORG_ID }}
-          container-name: ${{ secrets.DEPLOY_CONTAINER_NAME }}
+          organization-id: ${{ vars.DEPLOY_ORG_ID }}
+          container-name: ${{ vars.DEPLOY_CONTAINER_NAME }}
           image: ${{ env.IMAGE_TAG }}
           registry-username: ${{ secrets.DEPLOY_REGISTRY_USERNAME }}
           registry-password: ${{ secrets.DEPLOY_REGISTRY_PASSWORD }}
 ```
 
-### Deploy a Pre-Built Image
+### Public Registry — Deploy an Existing Image
+
+No build/push step needed — just deploy a publicly available image.
 
 ```yml
 - name: Deploy to Tower Cloud
@@ -119,40 +142,9 @@ jobs:
   with:
     tower-user: ${{ secrets.DEPLOY_IAM_USERNAME }}
     tower-password: ${{ secrets.DEPLOY_IAM_PASSWORD }}
-    organization-id: ${{ secrets.DEPLOY_ORG_ID }}
-    container-name: ${{ secrets.DEPLOY_CONTAINER_NAME }}
-    image: test2.hyd.cr.tower.cloud/my-org/my-app:v1.2.0
-    registry-username: ${{ secrets.DEPLOY_REGISTRY_USERNAME }}
-    registry-password: ${{ secrets.DEPLOY_REGISTRY_PASSWORD }}
-```
-
-### Manual Trigger
-
-```yml
-name: Deploy to Tower Cloud
-
-on:
-  workflow_dispatch:
-    inputs:
-      image:
-        description: 'Full image URI to deploy'
-        required: true
-        type: string
-
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Deploy to Tower Cloud
-        uses: vinayteja-31/worflow-service@main
-        with:
-          tower-user: ${{ secrets.DEPLOY_IAM_USERNAME }}
-          tower-password: ${{ secrets.DEPLOY_IAM_PASSWORD }}
-          organization-id: ${{ secrets.DEPLOY_ORG_ID }}
-          container-name: ${{ secrets.DEPLOY_CONTAINER_NAME }}
-          image: ${{ inputs.image }}
-          registry-username: ${{ secrets.DEPLOY_REGISTRY_USERNAME }}
-          registry-password: ${{ secrets.DEPLOY_REGISTRY_PASSWORD }}
+    organization-id: ${{ vars.DEPLOY_ORG_ID }}
+    container-name: ${{ vars.DEPLOY_CONTAINER_NAME }}
+    image: docker.io/library/nginx:latest
 ```
 
 ## How the Image Tag Works
